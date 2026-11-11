@@ -89,7 +89,7 @@ footer{padding:18px;text-align:center;color:var(--muted);font-size:11px}
 <section id="pengaturan" class="page">
 <div class="topline"><div><h1>Pengaturan Toko</h1><div class="muted">Identitas toko dan pencadangan data</div></div></div>
 <div class="grid2"><div class="panel"><h2>Identitas toko</h2><div class="field"><label>Nama toko</label><input id="storeName" placeholder="Nama toko Anda"></div><div class="field"><label>Alamat</label><input id="storeAddress" placeholder="Alamat toko"></div><div class="field"><label>Nomor telepon</label><input id="storePhone" placeholder="08xxxxxxxxxx"></div><button onclick="saveSettings()">Simpan Pengaturan</button></div>
-<div class="panel"><h2>Cadangkan & pulihkan</h2><p class="muted">Simpan salinan data sebagai file JSON. Simpan file ini di tempat aman.</p><div class="actions"><button onclick="backupData()">Unduh Backup</button><label class="ghost" style="padding:10px 13px;border-radius:10px;cursor:pointer">Pulihkan Backup<input type="file" accept=".json,application/json" style="display:none" onchange="restoreData(event)"></label></div><hr style="border:0;border-top:1px solid var(--line);margin:18px 0"><h2>Database online (opsional)</h2><p class="muted">Aplikasi ini menggunakan Firebase untuk menyinkronkan data setelah masuk dengan akun yang diizinkan.</p><span class="pill">Sinkronisasi cloud aktif setelah login</span></div></div>
+<div class="panel"><h2>Cadangkan & pulihkan</h2><p class="muted">Simpan salinan data sebagai file JSON. Simpan file ini di tempat aman.</p><div class="actions"><button onclick="backupData()">Unduh Backup</button><label class="ghost" style="padding:10px 13px;border-radius:10px;cursor:pointer">Pulihkan Backup<input type="file" accept=".json,application/json" style="display:none" onchange="restoreData(event)"></label></div><hr style="border:0;border-top:1px solid var(--line);margin:18px 0"><h2>Database online (opsional)</h2><p class="muted">Aplikasi ini menggunakan Firebase untuk menyinkronkan data setelah masuk dengan akun yang diizinkan.</p><span class="pill">Sinkronisasi cloud aktif setelah login</span><button class="secondary" style="margin-top:10px;width:100%" onclick="retryCloudSync()">Sinkronisasi Ulang Sekarang</button></div></div>
 <div class="notice">Penting: gunakan akun kasir yang sama di semua perangkat. Hindari menyelesaikan transaksi secara bersamaan di beberapa perangkat agar perubahan stok tidak saling menimpa. Tetap lakukan backup berkala.</div>
 </section>
 <section id="receiptPrint" style="display:none"></section>
@@ -134,7 +134,7 @@ function saveDB(){
   localStorage.setItem(KEY,JSON.stringify(db));
   renderAll();
   if(window.cloudReady && !window.applyingCloud){
-    const syncTask = cloudSave();
+    const syncTask = window.cloudSave();
     syncTask.catch(err=>console.error('Gagal menyimpan ke cloud:',err));
     return syncTask;
   }
@@ -155,8 +155,6 @@ function removeCart(pid){cart=cart.filter(c=>c.id!==pid);renderCart()}
 function clearCart(){cart=[];$('discount').value=0;$('paid').value='';renderCart()}
 async function checkout(){
   if(checkoutBusy || !cart.length)return;
-  checkoutBusy=true;
-  $('checkoutBtn').disabled=true;
   const sub=cart.reduce((a,c)=>a+c.price*c.qty,0);
   const disc=Math.min(sub,Math.max(0,Number($('discount').value)||0));
   const total=sub-disc;
@@ -166,6 +164,8 @@ async function checkout(){
     const p=db.products.find(x=>x.id===c.id);
     if(!p||p.stock<c.qty)return alert('Stok '+c.name+' tidak mencukupi');
   }
+  checkoutBusy=true;
+  $('checkoutBtn').disabled=true;
   const tx={id:id(),number:'TRX-'+Date.now().toString().slice(-8),date:today(),time:new Date().toLocaleTimeString('id-ID'),items:cart.map(c=>({...c})),subtotal:sub,discount:disc,total,paid,change:paid-total};
   cart.forEach(c=>{const p=db.products.find(x=>x.id===c.id);p.stock-=c.qty;});
   db.transactions.push(tx);
@@ -204,6 +204,24 @@ function restoreData(e){let f=e.target.files[0];if(!f)return;let r=new FileReade
 function exportCSV(kind){let rows;if(kind==='transactions'){rows=[['Nomor','Tanggal','Jam','Subtotal','Diskon','Total','Bayar','Kembalian'],...db.transactions.map(t=>[t.number,t.date,t.time,t.subtotal,t.discount,t.total,t.paid,t.change])]}else{rows=[['Nomor','Tanggal','Barang','Qty','Harga jual','Harga modal','Total'],...db.transactions.flatMap(t=>t.items.map(i=>[t.number,t.date,i.name,i.qty,i.price,i.cost,i.qty*i.price]))]}let csv=rows.map(r=>r.map(v=>'"'+String(v??'').replace(/"/g,'""')+'"').join(',')).join('\n'),a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'}));a.download='laporan-kasir-'+today()+'.csv';a.click();URL.revokeObjectURL(a.href)}
 function $(x){return document.getElementById(x)}
 renderAll();loadSettings();
+
+async function retryCloudSync(){
+  if(!window.cloudReady || !firebase.auth().currentUser){
+    alert('Silakan login dan tunggu koneksi cloud siap sebelum mencoba sinkronisasi.');
+    return;
+  }
+  const btn = document.querySelector('button[onclick="retryCloudSync()"]');
+  if(btn){btn.disabled=true;btn.textContent='Menyinkronkan...';}
+  try{
+    await window.cloudSave();
+    alert('Sinkronisasi ulang berhasil. Data perangkat sudah dikirim ke cloud.');
+  }catch(error){
+    console.error('Sinkronisasi ulang gagal:',error);
+    alert('Sinkronisasi masih gagal: '+(error.message||error.code||'Kesalahan tidak diketahui'));
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent='Sinkronisasi Ulang Sekarang';}
+  }
+}
 
 // ===== FIREBASE CLOUD SYNC =====
 const firebaseConfig = {
@@ -386,6 +404,8 @@ try {
     });
     return cloudSaveQueue;
   }
+  // Ekspos fungsi agar saveDB() di luar blok try dapat memanggilnya.
+  window.cloudSave = cloudSave;
 } catch (e) {
   console.error('Firebase gagal diinisialisasi:',e);
   $('connectionStatus').textContent = 'Firebase gagal dimuat';
