@@ -32,7 +32,7 @@ footer{padding:18px;text-align:center;color:var(--muted);font-size:11px}
 </style>
 </head>
 <body>
-<header><div><div class="brand">🛒 KASIR SEMBAKO</div><div class="subbrand">Point of Sale • Toko Kelontong</div></div><div class="status" id="connectionStatus">Mode lokal • data di perangkat ini</div></header>
+<header><div><div class="brand">🛒 KASIR SEMBAKO</div><div class="subbrand">Point of Sale • Toko Kelontong</div></div><div style="display:flex;align-items:center;gap:8px"><div class="status" id="connectionStatus">Menghubungkan...</div><button id="cloudLogoutBtn" class="secondary small" style="display:none" onclick="cloudLogout()">Keluar</button></div></header>
 <div class="layout">
 <aside class="no-print"><nav id="nav">
 <button class="active" data-page="dashboard">▦ Dashboard</button>
@@ -89,8 +89,8 @@ footer{padding:18px;text-align:center;color:var(--muted);font-size:11px}
 <section id="pengaturan" class="page">
 <div class="topline"><div><h1>Pengaturan Toko</h1><div class="muted">Identitas toko dan pencadangan data</div></div></div>
 <div class="grid2"><div class="panel"><h2>Identitas toko</h2><div class="field"><label>Nama toko</label><input id="storeName" placeholder="Nama toko Anda"></div><div class="field"><label>Alamat</label><input id="storeAddress" placeholder="Alamat toko"></div><div class="field"><label>Nomor telepon</label><input id="storePhone" placeholder="08xxxxxxxxxx"></div><button onclick="saveSettings()">Simpan Pengaturan</button></div>
-<div class="panel"><h2>Cadangkan & pulihkan</h2><p class="muted">Simpan salinan data sebagai file JSON. Simpan file ini di tempat aman.</p><div class="actions"><button onclick="backupData()">Unduh Backup</button><label class="ghost" style="padding:10px 13px;border-radius:10px;cursor:pointer">Pulihkan Backup<input type="file" accept=".json,application/json" style="display:none" onchange="restoreData(event)"></label></div><hr style="border:0;border-top:1px solid var(--line);margin:18px 0"><h2>Database online (opsional)</h2><p class="muted">Untuk sinkronisasi HP dan PC, hubungkan Firebase. Ikuti panduan README di paket aplikasi.</p><span class="pill">Versi awal: penyimpanan lokal</span></div></div>
-<div class="notice">Penting: mode lokal menyimpan data di browser/perangkat ini. Data tidak otomatis berpindah ke HP atau PC lain. Lakukan backup berkala atau ikuti panduan Firebase untuk sinkronisasi cloud.</div>
+<div class="panel"><h2>Cadangkan & pulihkan</h2><p class="muted">Simpan salinan data sebagai file JSON. Simpan file ini di tempat aman.</p><div class="actions"><button onclick="backupData()">Unduh Backup</button><label class="ghost" style="padding:10px 13px;border-radius:10px;cursor:pointer">Pulihkan Backup<input type="file" accept=".json,application/json" style="display:none" onchange="restoreData(event)"></label></div><hr style="border:0;border-top:1px solid var(--line);margin:18px 0"><h2>Database online (opsional)</h2><p class="muted">Aplikasi ini menggunakan Firebase untuk menyinkronkan data setelah masuk dengan akun yang diizinkan.</p><span class="pill">Sinkronisasi cloud aktif setelah login</span></div></div>
+<div class="notice">Penting: gunakan akun kasir yang sama di semua perangkat. Hindari menyelesaikan transaksi secara bersamaan di beberapa perangkat agar perubahan stok tidak saling menimpa. Tetap lakukan backup berkala.</div>
 </section>
 <section id="receiptPrint" style="display:none"></section>
 <footer>Kasir Sembako POS • Simpan backup data secara berkala.</footer>
@@ -104,6 +104,23 @@ footer{padding:18px;text-align:center;color:var(--muted);font-size:11px}
 <div class="grid2"><div class="field"><label>Stok awal</label><input id="pStock" type="number" min="0" value="0"></div><div class="field"><label>Batas stok menipis</label><input id="pMin" type="number" min="0" value="5"></div></div>
 <button style="width:100%" onclick="saveProduct()">Simpan Barang</button></div></div>
 
+
+<div id="loginOverlay" style="display:flex;position:fixed;inset:0;background:#f5f7f5;z-index:100;align-items:center;justify-content:center;padding:18px">
+  <div style="background:#fff;border:1px solid #e3e9e4;border-radius:16px;padding:22px;width:min(390px,100%);box-shadow:0 12px 40px #0001">
+    <h2 style="margin:0 0 6px;color:#166534">Kasir Forza Stored</h2>
+    <p class="muted" style="margin:0 0 16px">Masuk untuk menyinkronkan data kasir di HP dan PC.</p>
+    <div class="field"><label>Email</label><input id="cloudEmail" type="email" autocomplete="username" placeholder="Email akun kasir"></div>
+    <div class="field"><label>Password</label><input id="cloudPassword" type="password" autocomplete="current-password" placeholder="Password"></div>
+    <button id="cloudLoginBtn" style="width:100%" onclick="cloudLogin()">Masuk</button>
+    <p id="cloudLoginError" style="color:#b91c1c;font-size:12px;margin:10px 0 0"></p>
+    <p class="muted" style="font-size:11px;margin:14px 0 0">Akun dibuat melalui Firebase Authentication. Data lokal perangkat ini akan disalin ke cloud jika database cloud masih kosong.</p>
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+
 <script>
 const KEY='kasirSembakoDataV1';
 const today=()=>new Date().toISOString().slice(0,10);
@@ -112,7 +129,11 @@ const id=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
 let db=loadDB(),cart=[];
 function seed(){return {products:[],transactions:[],stockLogs:[],settings:{name:'Toko Sembako',address:'',phone:''}}}
 function loadDB(){try{return JSON.parse(localStorage.getItem(KEY))||seed()}catch{return seed()}}
-function saveDB(){localStorage.setItem(KEY,JSON.stringify(db));renderAll()}
+function saveDB(){
+  localStorage.setItem(KEY,JSON.stringify(db));
+  renderAll();
+  if(window.cloudReady && !window.applyingCloud) cloudSave().catch(err=>console.error('Gagal menyimpan ke cloud:',err));
+}
 function go(page){document.querySelectorAll('.page').forEach(x=>x.classList.toggle('active',x.id===page));document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('active',x.dataset.page===page));if(page==='kasir'){renderProducts();renderCart()}if(page==='barang')renderInventory();if(page==='stok')renderStock();if(page==='transaksi')renderTransactions();if(page==='laporan')renderReport();if(page==='dashboard')renderDashboard();if(page==='pengaturan')loadSettings()}
 document.getElementById('nav').addEventListener('click',e=>{let b=e.target.closest('button[data-page]');if(b)go(b.dataset.page)});
 function renderAll(){renderDashboard();renderProducts();renderInventory();renderStock();renderTransactions();renderReport();updateFilters()}
@@ -146,5 +167,180 @@ function restoreData(e){let f=e.target.files[0];if(!f)return;let r=new FileReade
 function exportCSV(kind){let rows;if(kind==='transactions'){rows=[['Nomor','Tanggal','Jam','Subtotal','Diskon','Total','Bayar','Kembalian'],...db.transactions.map(t=>[t.number,t.date,t.time,t.subtotal,t.discount,t.total,t.paid,t.change])]}else{rows=[['Nomor','Tanggal','Barang','Qty','Harga jual','Harga modal','Total'],...db.transactions.flatMap(t=>t.items.map(i=>[t.number,t.date,i.name,i.qty,i.price,i.cost,i.qty*i.price]))]}let csv=rows.map(r=>r.map(v=>'"'+String(v??'').replace(/"/g,'""')+'"').join(',')).join('\n'),a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'}));a.download='laporan-kasir-'+today()+'.csv';a.click();URL.revokeObjectURL(a.href)}
 function $(x){return document.getElementById(x)}
 renderAll();loadSettings();
+
+// ===== FIREBASE CLOUD SYNC =====
+const firebaseConfig = {
+  apiKey: "AIzaSyCmDIfqS-zPPqi3rxmUu1K1vOMElwy4tO4",
+  authDomain: "kasir-forza-stored-online.firebaseapp.com",
+  projectId: "kasir-forza-stored-online",
+  storageBucket: "kasir-forza-stored-online.firebasestorage.app",
+  messagingSenderId: "812063271378",
+  appId: "1:812063271378:web:89d11587f6413dd6f1c00b"
+};
+
+window.cloudReady = false;
+window.applyingCloud = false;
+let cloudDb = null;
+let cloudUnsubs = [];
+let cloudSaveQueue = Promise.resolve();
+let cloudLoaded = {products:false,transactions:false,stockLogs:false,settings:false};
+let cloudData = {products:[],transactions:[],stockLogs:[],settings:null};
+
+try {
+  if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+  const auth = firebase.auth();
+  cloudDb = firebase.firestore();
+
+  auth.onAuthStateChanged(async user => {
+    window.cloudReady = false;
+    cloudUnsubs.forEach(fn => fn());
+    cloudUnsubs = [];
+    cloudLoaded = {products:false,transactions:false,stockLogs:false,settings:false};
+
+    if (!user) {
+      $('loginOverlay').style.display = 'flex';
+      $('cloudLogoutBtn').style.display = 'none';
+      $('connectionStatus').textContent = 'Belum masuk';
+      return;
+    }
+
+    $('loginOverlay').style.display = 'none';
+    $('cloudLogoutBtn').style.display = 'inline-block';
+    $('connectionStatus').textContent = 'Menghubungkan cloud...';
+
+    const root = cloudDb.collection('stores').doc('main');
+    const collections = ['products','transactions','stockLogs'];
+    collections.forEach(name => {
+      const unsub = root.collection(name).onSnapshot(snapshot => {
+        cloudData[name] = snapshot.docs.map(d => d.data());
+        cloudLoaded[name] = true;
+        finishCloudLoadIfReady();
+        if (window.cloudReady) applyCloudData();
+      }, cloudError);
+      cloudUnsubs.push(unsub);
+    });
+    const settingsUnsub = root.collection('settings').doc('main').onSnapshot(snapshot => {
+      cloudData.settings = snapshot.exists ? snapshot.data() : null;
+      cloudLoaded.settings = true;
+      finishCloudLoadIfReady();
+      if (window.cloudReady) applyCloudData();
+    }, cloudError);
+    cloudUnsubs.push(settingsUnsub);
+
+    function applyCloudData(){
+      if (!window.cloudReady) return;
+      window.applyingCloud = true;
+      db = {
+        products: cloudData.products || [],
+        transactions: cloudData.transactions || [],
+        stockLogs: cloudData.stockLogs || [],
+        settings: cloudData.settings || seed().settings
+      };
+      localStorage.setItem(KEY, JSON.stringify(db));
+      renderAll();
+      loadSettings();
+      window.applyingCloud = false;
+    }
+
+    window.finishCloudLoadIfReady = finishCloudLoadIfReady;
+    async function finishCloudLoadIfReady(){
+      if (!Object.values(cloudLoaded).every(Boolean) || window.cloudReady) return;
+      const cloudIsEmpty = !cloudData.products.length && !cloudData.transactions.length &&
+                           !cloudData.stockLogs.length && !cloudData.settings;
+      const localHasData = db.products.length || db.transactions.length || db.stockLogs.length;
+      if (cloudIsEmpty && localHasData) {
+        try {
+          await cloudSave(true);
+        } catch(e) {
+          cloudError(e);
+          return;
+        }
+      } else {
+        window.applyingCloud = true;
+        db = {
+          products: cloudData.products,
+          transactions: cloudData.transactions,
+          stockLogs: cloudData.stockLogs,
+          settings: cloudData.settings || seed().settings
+        };
+        localStorage.setItem(KEY, JSON.stringify(db));
+        renderAll();
+        loadSettings();
+        window.applyingCloud = false;
+      }
+      window.cloudReady = true;
+      $('connectionStatus').textContent = 'Online • tersinkron';
+    }
+  });
+
+  window.cloudLogin = async function(){
+    const email = $('cloudEmail').value.trim();
+    const password = $('cloudPassword').value;
+    $('cloudLoginError').textContent = '';
+    if (!email || !password) {
+      $('cloudLoginError').textContent = 'Isi email dan password terlebih dahulu.';
+      return;
+    }
+    $('cloudLoginBtn').disabled = true;
+    try {
+      await firebase.auth().signInWithEmailAndPassword(email,password);
+    } catch(e) {
+      $('cloudLoginError').textContent = firebaseErrorText(e);
+    } finally {
+      $('cloudLoginBtn').disabled = false;
+    }
+  };
+
+  window.cloudLogout = async function(){
+    if (confirm('Keluar dari akun kasir?')) await firebase.auth().signOut();
+  };
+
+  function firebaseErrorText(e){
+    const map = {
+      'auth/invalid-credential':'Email atau password salah.',
+      'auth/user-not-found':'Akun tidak ditemukan.',
+      'auth/wrong-password':'Password salah.',
+      'auth/too-many-requests':'Terlalu banyak percobaan. Coba lagi nanti.',
+      'permission-denied':'Akses Firestore ditolak. Periksa Firestore Rules dan UID pemilik.',
+      'unavailable':'Koneksi internet bermasalah. Coba lagi.'
+    };
+    return map[e.code] || e.message || 'Gagal masuk. Periksa pengaturan Firebase.';
+  }
+
+  function cloudError(error){
+    console.error('Firebase:',error);
+    $('connectionStatus').textContent = 'Cloud bermasalah';
+    if (error && (error.code === 'permission-denied' || error.code === 'firestore/permission-denied')) {
+      $('cloudLoginError').textContent = 'Akses database ditolak. Periksa Firestore Rules.';
+    }
+  }
+
+  async function cloudSave(force=false){
+    if (!cloudDb || (!firebase.auth().currentUser && !force)) return;
+    const root = cloudDb.collection('stores').doc('main');
+    const data = JSON.parse(JSON.stringify(db));
+    cloudSaveQueue = cloudSaveQueue.then(async () => {
+      const batch = cloudDb.batch();
+      for (const name of ['products','transactions','stockLogs']) {
+        const col = root.collection(name);
+        const old = await col.get();
+        old.docs.forEach(doc => batch.delete(doc.ref));
+        (data[name] || []).forEach(item => {
+          if (!item.id) item.id = id();
+          batch.set(col.doc(String(item.id)), item);
+        });
+      }
+      batch.set(root.collection('settings').doc('main'), data.settings || seed().settings);
+      await batch.commit();
+      localStorage.setItem(KEY, JSON.stringify(db));
+      $('connectionStatus').textContent = 'Online • tersinkron';
+    });
+    return cloudSaveQueue;
+  }
+} catch (e) {
+  console.error('Firebase gagal diinisialisasi:',e);
+  $('connectionStatus').textContent = 'Firebase gagal dimuat';
+}
+
 </script>
 </body></html>
