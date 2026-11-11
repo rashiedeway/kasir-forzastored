@@ -208,6 +208,40 @@ function lookupBarcode(raw){
   $('barcodeInput').value='';
   $('barcodeInput').focus();
 }
+// Tangkap scanner USB/Bluetooth secara global saat halaman kasir aktif.
+// Scanner keyboard-wedge mengirim karakter berurutan sangat cepat lalu Enter.
+let globalScanBuffer='', globalScanLastAt=0, globalScanTarget=null, globalScanOriginal='', globalScanFast=true;
+document.addEventListener('keydown',function(event){
+  const kasirPage=$('kasir');
+  if(!kasirPage || !kasirPage.classList.contains('active'))return;
+  const now=Date.now();
+  if(event.key==='Enter'){
+    if(globalScanBuffer.length>=4 && globalScanFast){
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if(globalScanTarget && document.contains(globalScanTarget) && 'value' in globalScanTarget){
+        globalScanTarget.value=globalScanOriginal;
+      }
+      const scanned=globalScanBuffer;
+      globalScanBuffer='';globalScanLastAt=0;globalScanTarget=null;globalScanOriginal='';globalScanFast=true;
+      lookupBarcode(scanned);
+    }else{
+      globalScanBuffer='';globalScanLastAt=0;globalScanTarget=null;globalScanOriginal='';globalScanFast=true;
+    }
+    return;
+  }
+  if(event.key.length!==1 || event.ctrlKey || event.altKey || event.metaKey)return;
+  if(!globalScanLastAt || now-globalScanLastAt>120){
+    globalScanBuffer=event.key;
+    globalScanTarget=event.target;
+    globalScanOriginal=('value' in event.target)?event.target.value:'';
+    globalScanFast=true;
+  }else{
+    if(now-globalScanLastAt>120)globalScanFast=false;
+    globalScanBuffer+=event.key;
+  }
+  globalScanLastAt=now;
+},true);
 async function startBarcodeCamera(){
   if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){alert('Akses kamera memerlukan browser yang mendukung kamera dan halaman HTTPS.');return}
   if(!('BarcodeDetector' in window)){alert('Pemindai kamera belum didukung browser ini. Gunakan Chrome versi terbaru atau scanner USB/Bluetooth pada PC.');return}
