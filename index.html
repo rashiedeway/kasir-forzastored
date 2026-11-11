@@ -57,7 +57,10 @@ footer{padding:18px;text-align:center;color:var(--muted);font-size:11px}
 <section id="kasir" class="page">
 <div class="topline"><div><h1>Kasir</h1><div class="muted">Pilih barang untuk memasukkan ke keranjang</div></div><span class="pill" id="cartCount">0 barang</span></div>
 <div class="pos">
-<div class="panel"><div class="toolbar"><input id="productSearch" placeholder="Cari nama / kode barang..." oninput="renderProducts()"><select id="categoryFilter" onchange="renderProducts()"><option value="">Semua kategori</option></select></div><div class="products" id="productGrid"></div></div>
+<div class="panel">
+<div class="toolbar"><input id="barcodeInput" placeholder="Scan barcode di sini (scanner PC)" autocomplete="off" onkeydown="barcodeKeydown(event)"><button type="button" onclick="lookupBarcode()">Cari Barcode</button><button type="button" class="secondary" onclick="startBarcodeCamera()">📷 Kamera HP</button></div>
+<div class="muted" style="font-size:11px;margin:-5px 0 12px">Scanner USB/Bluetooth PC akan mengetik kode ke kolom ini. Pastikan kode barcode sudah disimpan pada Data Barang.</div>
+<div class="toolbar"><input id="productSearch" placeholder="Cari nama / kode barang..." oninput="renderProducts()"><select id="categoryFilter" onchange="renderProducts()"><option value="">Semua kategori</option></select></div><div class="products" id="productGrid"></div></div>
 <div class="panel"><h2>Keranjang belanja</h2><div id="cartItems" class="empty">Belum ada barang dipilih</div><hr style="border:0;border-top:1px solid var(--line);margin:10px 0">
 <div class="total"><span>Subtotal</span><strong id="subtotal">Rp0</strong></div>
 <div class="field"><label>Diskon transaksi (Rp)</label><input type="number" min="0" id="discount" value="0" oninput="renderCart()"></div>
@@ -105,6 +108,8 @@ footer{padding:18px;text-align:center;color:var(--muted);font-size:11px}
 <button style="width:100%" onclick="saveProduct()">Simpan Barang</button></div></div>
 
 
+<div class="modal" id="barcodeModal"><div class="modalbox"><div class="modalhead"><h2>Scan Barcode dengan Kamera</h2><button class="ghost small" onclick="stopBarcodeCamera()">Tutup</button></div><p class="muted">Arahkan kamera belakang HP ke barcode produk.</p><video id="barcodeVideo" playsinline muted style="width:100%;max-height:55vh;background:#111;border-radius:12px;object-fit:cover"></video><p class="muted" style="font-size:11px">Jika kamera tidak didukung, gunakan scanner USB/Bluetooth atau kolom scan manual.</p></div></div>
+
 <div id="loginOverlay" style="display:flex;position:fixed;inset:0;background:#f5f7f5;z-index:100;align-items:center;justify-content:center;padding:18px">
   <div style="background:#fff;border:1px solid #e3e9e4;border-radius:16px;padding:22px;width:min(390px,100%);box-shadow:0 12px 40px #0001">
     <h2 style="margin:0 0 6px;color:#166534">Kasir Forza Stored</h2>
@@ -140,7 +145,7 @@ function saveDB(){
   }
   return Promise.resolve();
 }
-function go(page){document.querySelectorAll('.page').forEach(x=>x.classList.toggle('active',x.id===page));document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('active',x.dataset.page===page));if(page==='kasir'){renderProducts();renderCart()}if(page==='barang')renderInventory();if(page==='stok')renderStock();if(page==='transaksi')renderTransactions();if(page==='laporan')renderReport();if(page==='dashboard')renderDashboard();if(page==='pengaturan')loadSettings()}
+function go(page){document.querySelectorAll('.page').forEach(x=>x.classList.toggle('active',x.id===page));document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('active',x.dataset.page===page));if(page==='kasir'){renderProducts();renderCart();setTimeout(()=>$('barcodeInput').focus(),50)}if(page==='barang')renderInventory();if(page==='stok')renderStock();if(page==='transaksi')renderTransactions();if(page==='laporan')renderReport();if(page==='dashboard')renderDashboard();if(page==='pengaturan')loadSettings()}
 document.getElementById('nav').addEventListener('click',e=>{let b=e.target.closest('button[data-page]');if(b)go(b.dataset.page)});
 function renderAll(){renderDashboard();renderProducts();renderInventory();renderStock();renderTransactions();renderReport();updateFilters()}
 function updateFilters(){let cats=[...new Set(db.products.map(p=>p.category).filter(Boolean))];['categoryFilter','inventoryCat'].forEach(k=>{let el=document.getElementById(k),v=el.value;el.innerHTML='<option value="">Semua kategori</option>'+cats.map(c=>`<option>${esc(c)}</option>`).join('');el.value=v})}
@@ -185,6 +190,67 @@ async function checkout(){
     renderCart();
   }
 }
+// ===== BARCODE SCANNER =====
+let barcodeStream = null;
+let barcodeTimer = null;
+let barcodeDetecting = false;
+let lastBarcodeValue = '';
+let lastBarcodeAt = 0;
+function normalizeBarcode(value){return String(value||'').trim().replace(/\s+/g,'').toUpperCase()}
+function barcodeKeydown(event){if(event.key==='Enter'){event.preventDefault();lookupBarcode()}}
+function lookupBarcode(raw){
+  const code=normalizeBarcode(raw || $('barcodeInput').value);
+  if(!code)return;
+  const product=db.products.find(p=>normalizeBarcode(p.code)===code);
+  if(!product){$('barcodeInput').value=code;alert('Barcode '+code+' belum terdaftar. Tambahkan kode ini pada Data Barang.');$('barcodeInput').focus();return}
+  if(product.stock<=0){alert('Stok '+product.name+' habis.');$('barcodeInput').value='';$('barcodeInput').focus();return}
+  addCart(product.id);
+  $('barcodeInput').value='';
+  $('barcodeInput').focus();
+}
+async function startBarcodeCamera(){
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){alert('Akses kamera memerlukan browser yang mendukung kamera dan halaman HTTPS.');return}
+  if(!('BarcodeDetector' in window)){alert('Pemindai kamera belum didukung browser ini. Gunakan Chrome versi terbaru atau scanner USB/Bluetooth pada PC.');return}
+  try{
+    const supported=await BarcodeDetector.getSupportedFormats();
+    const wanted=['ean_13','ean_8','upc_a','upc_e','code_128','code_39','itf','codabar'];
+    const formats=wanted.filter(f=>supported.includes(f));
+    const detector=new BarcodeDetector(formats.length?{formats}:undefined);
+    barcodeStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});
+    const video=$('barcodeVideo');
+    video.srcObject=barcodeStream;
+    $('barcodeModal').classList.add('show');
+    await video.play();
+    barcodeTimer=setInterval(async()=>{
+      if(barcodeDetecting || video.readyState<2)return;
+      barcodeDetecting=true;
+      try{
+        const found=await detector.detect(video);
+        if(found.length){
+          const code=normalizeBarcode(found[0].rawValue);
+          const now=Date.now();
+          if(code && (code!==lastBarcodeValue || now-lastBarcodeAt>1500)){
+            lastBarcodeValue=code;lastBarcodeAt=now;
+            stopBarcodeCamera();
+            lookupBarcode(code);
+          }
+        }
+      }catch(err){console.error('Gagal membaca barcode dari kamera:',err)}
+      finally{barcodeDetecting=false}
+    },250);
+  }catch(err){
+    console.error('Kamera barcode gagal dibuka:',err);
+    alert('Kamera gagal dibuka. Izinkan akses kamera dan pastikan aplikasi dibuka melalui HTTPS. Detail: '+(err.message||err));
+    stopBarcodeCamera();
+  }
+}
+function stopBarcodeCamera(){
+  if(barcodeTimer){clearInterval(barcodeTimer);barcodeTimer=null}
+  if(barcodeStream){barcodeStream.getTracks().forEach(track=>track.stop());barcodeStream=null}
+  const video=$('barcodeVideo');if(video)video.srcObject=null;
+  const modal=$('barcodeModal');if(modal)modal.classList.remove('show');
+}
+
 function printReceipt(t){let s=db.settings;$('receiptPrint').innerHTML=`<div style="max-width:300px;margin:0 auto;font:12px monospace;color:#000"><center><b>${esc(s.name)}</b><br>${esc(s.address)}<br>${esc(s.phone)}<hr><b>STRUK PEMBELIAN</b><br>${t.number}<br>${t.date} ${t.time}</center><hr>${t.items.map(i=>`<div>${esc(i.name)}<br>${i.qty} x ${rupiah(i.price)} <span style="float:right">${rupiah(i.qty*i.price)}</span></div>`).join('<br>')}<hr><div>Subtotal <span style="float:right">${rupiah(t.subtotal)}</span></div><div>Diskon <span style="float:right">${rupiah(t.discount)}</span></div><b>Total <span style="float:right">${rupiah(t.total)}</span></b><br>Bayar <span style="float:right">${rupiah(t.paid)}</span><br>Kembali <span style="float:right">${rupiah(t.change)}</span><hr><center>Terima kasih telah berbelanja</center></div>`;$('receiptPrint').style.display='block';window.print();$('receiptPrint').style.display='none'}
 function openProduct(p=null){$('productModalTitle').textContent=p?'Edit Barang':'Tambah Barang';$('pId').value=p?.id||'';$('pName').value=p?.name||'';$('pCode').value=p?.code||'';$('pCategory').value=p?.category||'';$('pCost').value=p?.cost??'';$('pPrice').value=p?.price??'';$('pStock').value=p?.stock??0;$('pMin').value=p?.min??5;$('productModal').classList.add('show')}
 function closeProduct(){$('productModal').classList.remove('show')}
