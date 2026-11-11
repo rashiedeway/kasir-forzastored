@@ -126,13 +126,19 @@ const KEY='kasirSembakoDataV1';
 const today=()=>new Date().toISOString().slice(0,10);
 const rupiah=n=>'Rp'+Number(n||0).toLocaleString('id-ID');
 const id=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
-let db=loadDB(),cart=[];
+let db=loadDB(),cart=[],checkoutBusy=false;
 function seed(){return {products:[],transactions:[],stockLogs:[],settings:{name:'Toko Sembako',address:'',phone:''}}}
 function loadDB(){try{return JSON.parse(localStorage.getItem(KEY))||seed()}catch{return seed()}}
 function saveDB(){
+  // Simpan lokal lebih dulu agar data tidak hilang saat internet/Firebase bermasalah.
   localStorage.setItem(KEY,JSON.stringify(db));
   renderAll();
-  if(window.cloudReady && !window.applyingCloud) cloudSave().catch(err=>console.error('Gagal menyimpan ke cloud:',err));
+  if(window.cloudReady && !window.applyingCloud){
+    const syncTask = cloudSave();
+    syncTask.catch(err=>console.error('Gagal menyimpan ke cloud:',err));
+    return syncTask;
+  }
+  return Promise.resolve();
 }
 function go(page){document.querySelectorAll('.page').forEach(x=>x.classList.toggle('active',x.id===page));document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('active',x.dataset.page===page));if(page==='kasir'){renderProducts();renderCart()}if(page==='barang')renderInventory();if(page==='stok')renderStock();if(page==='transaksi')renderTransactions();if(page==='laporan')renderReport();if(page==='dashboard')renderDashboard();if(page==='pengaturan')loadSettings()}
 document.getElementById('nav').addEventListener('click',e=>{let b=e.target.closest('button[data-page]');if(b)go(b.dataset.page)});
@@ -147,7 +153,38 @@ let sub=cart.reduce((a,c)=>a+c.price*c.qty,0),disc=Math.max(0,Number($('discount
 function changeQty(pid,d){let c=cart.find(x=>x.id===pid),p=db.products.find(x=>x.id===pid);if(!c)return;if(d>0&&c.qty>=p.stock)return alert('Stok tidak mencukupi');c.qty+=d;if(c.qty<=0)removeCart(pid);else renderCart()}
 function removeCart(pid){cart=cart.filter(c=>c.id!==pid);renderCart()}
 function clearCart(){cart=[];$('discount').value=0;$('paid').value='';renderCart()}
-function checkout(){if(!cart.length)return;let sub=cart.reduce((a,c)=>a+c.price*c.qty,0),disc=Math.min(sub,Math.max(0,Number($('discount').value)||0)),total=sub-disc,paid=Number($('paid').value)||0;if(paid<total)return alert('Uang diterima kurang');for(let c of cart){let p=db.products.find(x=>x.id===c.id);if(!p||p.stock<c.qty)return alert('Stok '+c.name+' tidak mencukupi')}let tx={id:id(),number:'TRX-'+Date.now().toString().slice(-8),date:today(),time:new Date().toLocaleTimeString('id-ID'),items:cart.map(c=>({...c})),subtotal:sub,discount:disc,total,paid,change:paid-total};cart.forEach(c=>{let p=db.products.find(x=>x.id===c.id);p.stock-=c.qty});db.transactions.push(tx);saveDB();clearCart();printReceipt(tx);alert('Transaksi tersimpan. Struk siap dicetak.')}
+async function checkout(){
+  if(checkoutBusy || !cart.length)return;
+  checkoutBusy=true;
+  $('checkoutBtn').disabled=true;
+  const sub=cart.reduce((a,c)=>a+c.price*c.qty,0);
+  const disc=Math.min(sub,Math.max(0,Number($('discount').value)||0));
+  const total=sub-disc;
+  const paid=Number($('paid').value)||0;
+  if(paid<total)return alert('Uang diterima kurang');
+  for(const c of cart){
+    const p=db.products.find(x=>x.id===c.id);
+    if(!p||p.stock<c.qty)return alert('Stok '+c.name+' tidak mencukupi');
+  }
+  const tx={id:id(),number:'TRX-'+Date.now().toString().slice(-8),date:today(),time:new Date().toLocaleTimeString('id-ID'),items:cart.map(c=>({...c})),subtotal:sub,discount:disc,total,paid,change:paid-total};
+  cart.forEach(c=>{const p=db.products.find(x=>x.id===c.id);p.stock-=c.qty;});
+  db.transactions.push(tx);
+  try{
+    await saveDB();
+    clearCart();
+    printReceipt(tx);
+    alert(window.cloudReady && firebase.auth().currentUser ? 'Transaksi berhasil disimpan dan tersinkron ke cloud.' : 'Transaksi berhasil disimpan di perangkat ini. Login dan koneksi cloud belum siap, jadi data belum tersinkron ke perangkat lain.');
+  }catch(error){
+    // Transaksi sudah aman di localStorage; kosongkan keranjang agar tidak terjual dua kali.
+    clearCart();
+    printReceipt(tx);
+    console.error('Sinkronisasi transaksi gagal:',error);
+    alert('Transaksi tersimpan di perangkat ini, tetapi gagal disinkronkan ke cloud. Periksa koneksi internet dan Firebase, lalu coba sinkronisasi ulang.');
+  } finally {
+    checkoutBusy=false;
+    renderCart();
+  }
+}
 function printReceipt(t){let s=db.settings;$('receiptPrint').innerHTML=`<div style="max-width:300px;margin:0 auto;font:12px monospace;color:#000"><center><b>${esc(s.name)}</b><br>${esc(s.address)}<br>${esc(s.phone)}<hr><b>STRUK PEMBELIAN</b><br>${t.number}<br>${t.date} ${t.time}</center><hr>${t.items.map(i=>`<div>${esc(i.name)}<br>${i.qty} x ${rupiah(i.price)} <span style="float:right">${rupiah(i.qty*i.price)}</span></div>`).join('<br>')}<hr><div>Subtotal <span style="float:right">${rupiah(t.subtotal)}</span></div><div>Diskon <span style="float:right">${rupiah(t.discount)}</span></div><b>Total <span style="float:right">${rupiah(t.total)}</span></b><br>Bayar <span style="float:right">${rupiah(t.paid)}</span><br>Kembali <span style="float:right">${rupiah(t.change)}</span><hr><center>Terima kasih telah berbelanja</center></div>`;$('receiptPrint').style.display='block';window.print();$('receiptPrint').style.display='none'}
 function openProduct(p=null){$('productModalTitle').textContent=p?'Edit Barang':'Tambah Barang';$('pId').value=p?.id||'';$('pName').value=p?.name||'';$('pCode').value=p?.code||'';$('pCategory').value=p?.category||'';$('pCost').value=p?.cost??'';$('pPrice').value=p?.price??'';$('pStock').value=p?.stock??0;$('pMin').value=p?.min??5;$('productModal').classList.add('show')}
 function closeProduct(){$('productModal').classList.remove('show')}
@@ -180,6 +217,7 @@ const firebaseConfig = {
 
 window.cloudReady = false;
 window.applyingCloud = false;
+window.cloudSaving = false;
 let cloudDb = null;
 let cloudUnsubs = [];
 let cloudSaveQueue = Promise.resolve();
@@ -215,7 +253,7 @@ try {
         cloudData[name] = snapshot.docs.map(d => d.data());
         cloudLoaded[name] = true;
         finishCloudLoadIfReady();
-        if (window.cloudReady) applyCloudData();
+        if (window.cloudReady && !window.cloudSaving) applyCloudData();
       }, cloudError);
       cloudUnsubs.push(unsub);
     });
@@ -244,7 +282,7 @@ try {
 
     window.finishCloudLoadIfReady = finishCloudLoadIfReady;
     async function finishCloudLoadIfReady(){
-      if (!Object.values(cloudLoaded).every(Boolean) || window.cloudReady) return;
+      if (!Object.values(cloudLoaded).every(Boolean) || window.cloudReady || window.cloudSaving) return;
       const cloudIsEmpty = !cloudData.products.length && !cloudData.transactions.length &&
                            !cloudData.stockLogs.length && !cloudData.settings;
       const localHasData = db.products.length || db.transactions.length || db.stockLogs.length;
@@ -319,21 +357,32 @@ try {
     if (!cloudDb || (!firebase.auth().currentUser && !force)) return;
     const root = cloudDb.collection('stores').doc('main');
     const data = JSON.parse(JSON.stringify(db));
-    cloudSaveQueue = cloudSaveQueue.then(async () => {
-      const batch = cloudDb.batch();
-      for (const name of ['products','transactions','stockLogs']) {
-        const col = root.collection(name);
-        const old = await col.get();
-        old.docs.forEach(doc => batch.delete(doc.ref));
-        (data[name] || []).forEach(item => {
-          if (!item.id) item.id = id();
-          batch.set(col.doc(String(item.id)), item);
-        });
+    // Pulihkan antrean setelah kegagalan sebelumnya agar transaksi berikutnya tetap bisa disimpan.
+    cloudSaveQueue = cloudSaveQueue.catch(()=>{}).then(async () => {
+      window.cloudSaving = true;
+      try {
+        // Firestore membatasi maksimal 500 operasi per batch; gunakan 400 agar aman.
+        for (const name of ['products','transactions','stockLogs']) {
+          const col = root.collection(name);
+          const old = await col.get();
+          const operations = [];
+          old.docs.forEach(doc => operations.push({type:'delete',ref:doc.ref}));
+          (data[name] || []).forEach(item => {
+            if (!item.id) item.id = id();
+            operations.push({type:'set',ref:col.doc(String(item.id)),data:item});
+          });
+          for (let i=0;i<operations.length;i+=400) {
+            const batch = cloudDb.batch();
+            operations.slice(i,i+400).forEach(op => op.type==='delete' ? batch.delete(op.ref) : batch.set(op.ref,op.data));
+            await batch.commit();
+          }
+        }
+        await root.collection('settings').doc('main').set(data.settings || seed().settings);
+        localStorage.setItem(KEY, JSON.stringify(db));
+        $('connectionStatus').textContent = 'Online • tersinkron';
+      } finally {
+        window.cloudSaving = false;
       }
-      batch.set(root.collection('settings').doc('main'), data.settings || seed().settings);
-      await batch.commit();
-      localStorage.setItem(KEY, JSON.stringify(db));
-      $('connectionStatus').textContent = 'Online • tersinkron';
     });
     return cloudSaveQueue;
   }
