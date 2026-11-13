@@ -143,7 +143,7 @@ function saveDB(){
   localStorage.setItem(KEY,JSON.stringify(db));
   renderAll();
   if(window.cloudReady && !window.applyingCloud){
-    const syncTask = cloudSave();
+    const syncTask = window.cloudSave();
     syncTask.catch(err=>console.error('Gagal menyimpan ke cloud:',err));
     return syncTask;
   }
@@ -201,7 +201,7 @@ document.addEventListener('keydown',event=>{
     resetBarcodeScan();
     return;
   }
-  if(event.key.length!==1||/\s/.test(event.key)){
+  if(typeof event.key!=='string'||event.key.length!==1||/\s/.test(event.key)){
     resetBarcodeScan();
     return;
   }
@@ -363,7 +363,7 @@ try {
       const localHasData = db.products.length || db.transactions.length || db.stockLogs.length;
       if (cloudIsEmpty && localHasData) {
         try {
-          await cloudSave(true);
+          await window.cloudSave(true);
         } catch(e) {
           cloudError(e);
           return;
@@ -428,7 +428,7 @@ try {
     }
   }
 
-  async function cloudSave(force=false){
+  window.cloudSave = async function(force=false){
     if (!cloudDb || (!firebase.auth().currentUser && !force)) return;
     const root = cloudDb.collection('stores').doc('main');
     const data = JSON.parse(JSON.stringify(db));
@@ -460,7 +460,7 @@ try {
       }
     });
     return cloudSaveQueue;
-  }
+  };
 } catch (e) {
   console.error('Firebase gagal diinisialisasi:',e);
   $('connectionStatus').textContent = 'Firebase gagal dimuat';
